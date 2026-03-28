@@ -1,0 +1,523 @@
+---
+title: "Followers to Founders"
+author: "Vincent V. Crowns"
+format: html
+editor: visual
+---
+
+```{r}
+### Setup the data and libraries
+library(plm)
+library(tidyverse)
+library(tidymodels)
+library(car)
+library(brms)
+data <- read_csv("FtF_cleaned.csv")
+```
+
+------------------------------------------------------------------------
+
+## Straightlining Check
+
+Remove any respondent who gave the same answer across all 3 scenarios for at least one outcome variable (purchase_intent, percived_honesty, or percived_authenticity).
+
+```{r}
+# Identify straightliners — constant response on ANY outcome across their scenarios
+straightliners <- data |>
+  group_by(ResponseId) |>
+  summarise(
+    sd_purchase  = sd(purchase_intent,       na.rm = TRUE),
+    sd_honesty   = sd(percived_honesty,      na.rm = TRUE),
+    sd_auth      = sd(percived_authenticity, na.rm = TRUE)
+  ) |>
+  filter(sd_purchase == 0 | sd_honesty == 0 | sd_auth == 0) |>
+  pull(ResponseId)
+
+cat("Straightliners removed:", length(straightliners), "\n")
+cat("Respondents remaining:", n_distinct(data$ResponseId) - length(straightliners), "\n")
+
+data <- data |> filter(!ResponseId %in% straightliners)
+```
+
+------------------------------------------------------------------------
+
+## Cleaning & Dummy-Coding
+
+```{r}
+cleaned_data <- data |>
+
+  # --- Dummy-code platforms ---
+  mutate(
+    plt_instagram = as.integer(str_detect(platforms, "Instagram")),
+    plt_snapchat  = as.integer(str_detect(platforms, "Snapchat")),
+    plt_tiktok    = as.integer(str_detect(platforms, "TikTok")),
+    plt_x         = as.integer(str_detect(platforms, "X \\(Twitter\\)")),
+    plt_youtube   = as.integer(str_detect(platforms, "YouTube")),
+    plt_twitch    = as.integer(str_detect(platforms, "Twitch")),
+    plt_facebook  = as.integer(str_detect(platforms, "FaceBook"))
+  ) |>
+
+  # --- Dummy-code influencers_known ---
+  mutate(
+    inf_shaq    = as.integer(str_detect(influencers_known, "Shaquille O'Neal")),
+    inf_kylie   = as.integer(str_detect(influencers_known, "Kylie Jenner")),
+    inf_mrbeast = as.integer(str_detect(influencers_known, "MrBeast")),
+    inf_logan   = as.integer(str_detect(influencers_known, "Logan Paul")),
+    inf_curry   = as.integer(str_detect(influencers_known, "Stephen Curry")),
+    inf_taylor  = as.integer(str_detect(influencers_known, "Taylor Swift")),
+    inf_ryan    = as.integer(str_detect(influencers_known, "Ryan Reynolds")),
+    inf_ksi     = as.integer(str_detect(influencers_known, "KSI")),
+    inf_charli  = as.integer(str_detect(influencers_known, "Charli D'Amelio"))
+  ) |>
+
+  # --- Drop original multi-value columns ---
+  dplyr::select(-platforms, -influencers_known) |>
+
+  # --- Scenario ID and cleaning ---
+  group_by(influencer, number_of_comments, number_of_likes, writting_style) |>
+  mutate(scenario = cur_group_id()) |>
+  ungroup() |>
+  drop_na() |>
+  group_by(ResponseId) |>
+  filter(n() > 1) |>
+  ungroup()
+
+colSums(is.na(cleaned_data))
+glimpse(cleaned_data)
+```
+
+```{r}
+### Convert binary conjoint attributes to factors
+# number_of_comments, number_of_likes, writting_style are 0/1 binary
+# influencer has 3 levels (-1, 0, 1) — effects-coded; 0 set as reference
+cleaned_data <- cleaned_data |>
+  mutate(
+    number_of_comments = as.factor(number_of_comments),
+    number_of_likes    = as.factor(number_of_likes),
+    writting_style     = as.factor(writting_style),
+    influencer         = as.factor(influencer)
+  )
+
+# Set 0 (mid-tier influencer) as the reference level for influencer
+cleaned_data$influencer <- relevel(cleaned_data$influencer, ref = "0")
+```
+
+```{r}
+### Build panel data frame
+cleaned_data$task <- ave(cleaned_data$scenario, cleaned_data$ResponseId, FUN = seq_along)
+pdata <- pdata.frame(cleaned_data, index = c("ResponseId", "task"))
+```
+
+------------------------------------------------------------------------
+
+## Preprocessing & Cross-Validation
+
+```{r}
+# Work from cleaned_data (non-panel tibble) for tidymodels
+set.seed(42)
+
+# 10-fold CV split — stratify on ResponseId so each fold has a mix of respondents
+cv_folds <- vfold_cv(cleaned_data, v = 10, strata = NULL)
+
+# --- Recipes: one per outcome (update_role cannot promote a var to outcome after the fact) ---
+pred_vars <- c("number_of_comments", "number_of_likes", "writting_style", "influencer",
+               "age_range", "gender", "income_level", "education", "race",
+               "employment_status", "marritial_status",
+               "influencer_interaction", "social_media_use", "product_purchase",
+               "plt_instagram", "plt_snapchat", "plt_tiktok", "plt_x",
+               "plt_youtube", "plt_twitch", "plt_facebook",
+               "inf_shaq", "inf_kylie", "inf_mrbeast", "inf_logan", "inf_curry",
+               "inf_taylor", "inf_ryan", "inf_ksi", "inf_charli")
+
+make_recipe <- function(outcome, data) {
+  f <- as.formula(paste(outcome, "~", paste(pred_vars, collapse = " + ")))
+  recipe(f, data = data) |>
+    step_novel(all_nominal_predictors()) |>
+    step_dummy(all_nominal_predictors()) |>
+    step_zv(all_predictors()) |>
+    step_normalize(all_numeric_predictors())
+}
+
+recipe_purchase <- make_recipe("purchase_intent",       cleaned_data)
+recipe_honesty  <- make_recipe("percived_honesty",      cleaned_data)
+recipe_auth     <- make_recipe("percived_authenticity", cleaned_data)
+
+# --- Linear regression spec for CV ---
+lm_spec <- linear_reg() |> set_engine("lm")
+
+# --- Workflows ---
+wf_purchase <- workflow() |> add_recipe(recipe_purchase) |> add_model(lm_spec)
+wf_honesty  <- workflow() |> add_recipe(recipe_honesty)  |> add_model(lm_spec)
+wf_auth     <- workflow() |> add_recipe(recipe_auth)     |> add_model(lm_spec)
+
+# --- Run 10-fold CV for each outcome ---
+cv_purchase <- fit_resamples(wf_purchase, resamples = cv_folds,
+                             metrics = metric_set(rmse, rsq, mae))
+cv_honesty  <- fit_resamples(wf_honesty,  resamples = cv_folds,
+                             metrics = metric_set(rmse, rsq, mae))
+cv_auth     <- fit_resamples(wf_auth,     resamples = cv_folds,
+                             metrics = metric_set(rmse, rsq, mae))
+
+# --- Summarise CV results ---
+cat("=== Purchase Intent CV ===\n");   print(collect_metrics(cv_purchase))
+cat("=== Perceived Honesty CV ===\n"); print(collect_metrics(cv_honesty))
+cat("=== Perceived Authenticity CV ===\n"); print(collect_metrics(cv_auth))
+```
+
+------------------------------------------------------------------------
+
+## PLM Random Effects Models
+
+### Purchase Intent
+
+*"I would consider purchasing this product."*
+
+```{r}
+# Base model
+model_purchase <- plm(
+  purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase)
+```
+
+```{r}
+# Interaction model
+model_purchase_int <- plm(
+  purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer,
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase_int)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+### Perceived Honesty
+
+*"This influencer seems honest."*
+
+```{r}
+# Base model
+model_honesty <- plm(
+  percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty)
+```
+
+```{r}
+# Interaction model
+model_honesty_int <- plm(
+  percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+    number_of_comments:plt_instagram + number_of_comments:plt_tiktok +
+    number_of_comments:plt_youtube + number_of_comments:plt_x +
+    number_of_likes:plt_instagram + number_of_likes:plt_tiktok +
+    number_of_likes:plt_youtube + number_of_likes:plt_x +
+    writting_style:plt_instagram + writting_style:plt_tiktok +
+    writting_style:plt_youtube + writting_style:plt_x +
+    influencer:plt_instagram + influencer:plt_tiktok +
+    influencer:plt_youtube + influencer:plt_x +
+    number_of_comments:inf_kylie + number_of_comments:inf_mrbeast +
+    number_of_comments:inf_logan + number_of_comments:inf_taylor +
+    number_of_likes:inf_kylie + number_of_likes:inf_mrbeast +
+    number_of_likes:inf_logan + number_of_likes:inf_taylor +
+    writting_style:inf_kylie + writting_style:inf_mrbeast +
+    writting_style:inf_logan + writting_style:inf_taylor +
+    influencer:inf_kylie + influencer:inf_mrbeast +
+    influencer:inf_logan + influencer:inf_taylor,
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty_int)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+### Perceived Authenticity
+
+*"This influencer seems authentic."*
+
+```{r}
+# Base model
+model_auth <- plm(
+  percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth)
+```
+
+```{r}
+# Interaction model
+model_auth_int <- plm(
+  percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+    number_of_comments:plt_instagram + number_of_comments:plt_tiktok +
+    number_of_comments:plt_youtube + number_of_comments:plt_x +
+    number_of_likes:plt_instagram + number_of_likes:plt_tiktok +
+    number_of_likes:plt_youtube + number_of_likes:plt_x +
+    writting_style:plt_instagram + writting_style:plt_tiktok +
+    writting_style:plt_youtube + writting_style:plt_x +
+    influencer:plt_instagram + influencer:plt_tiktok +
+    influencer:plt_youtube + influencer:plt_x +
+    number_of_comments:inf_kylie + number_of_comments:inf_mrbeast +
+    number_of_comments:inf_logan + number_of_comments:inf_taylor +
+    number_of_likes:inf_kylie + number_of_likes:inf_mrbeast +
+    number_of_likes:inf_logan + number_of_likes:inf_taylor +
+    writting_style:inf_kylie + writting_style:inf_mrbeast +
+    writting_style:inf_logan + writting_style:inf_taylor +
+    influencer:inf_kylie + influencer:inf_mrbeast +
+    influencer:inf_logan + influencer:inf_taylor,
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth_int)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Bayesian Hierarchical Models
+
+Note: these models use `brms` and call Stan to compile — first run will take several minutes per model. Subsequent runs are faster. Random effects are nested: respondents (ResponseId) within scenarios.
+
+```{r}
+# Shared priors — weakly informative
+priors <- c(
+  prior(normal(0, 5),  class = "b"),        # fixed effects
+  prior(normal(0, 10), class = "Intercept"),# intercept
+  prior(cauchy(0, 2),  class = "sd")        # random effect SDs
+)
+
+# --- Purchase Intent ---
+bayes_purchase <- brm(
+  formula = purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    (1 | ResponseId) + (1 | scenario),
+  data   = cleaned_data,
+  family = gaussian(),
+  prior  = priors,
+  chains = 4,
+  iter   = 2000,
+  warmup = 1000,
+  cores  = parallel::detectCores(),
+  seed   = 42
+)
+summary(bayes_purchase)
+pp_check(bayes_purchase, ndraws = 100)  # posterior predictive check
+
+## Report Findings Here:
+##
+##
+```
+
+```{r}
+# --- Perceived Honesty ---
+bayes_honesty <- brm(
+  formula = percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    (1 | ResponseId) + (1 | scenario),
+  data   = cleaned_data,
+  family = gaussian(),
+  prior  = priors,
+  chains = 4,
+  iter   = 2000,
+  warmup = 1000,
+  cores  = parallel::detectCores(),
+  seed   = 42
+)
+summary(bayes_honesty)
+pp_check(bayes_honesty, ndraws = 100)
+
+## Report Findings Here:
+##
+##
+```
+
+```{r}
+# --- Perceived Authenticity ---
+bayes_auth <- brm(
+  formula = percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    (1 | ResponseId) + (1 | scenario),
+  data   = cleaned_data,
+  family = gaussian(),
+  prior  = priors,
+  chains = 4,
+  iter   = 2000,
+  warmup = 1000,
+  cores  = parallel::detectCores(),
+  seed   = 42
+)
+summary(bayes_auth)
+pp_check(bayes_auth, ndraws = 100)
+
+## Report Findings Here:
+##
+##
+```
+
+```{r}
+# --- Model comparison via LOO-CV ---
+loo_purchase <- loo(bayes_purchase)
+loo_honesty  <- loo(bayes_honesty)
+loo_auth     <- loo(bayes_auth)
+
+print(loo_purchase)
+print(loo_honesty)
+print(loo_auth)
+```
+
+```{r}
+# --- RMSE comparison across PLM, CV, and Bayesian models ---
+
+# CV RMSE (already have these)
+rmse_cv <- bind_rows(
+  collect_metrics(cv_purchase) |> filter(.metric == "rmse") |>
+    mutate(outcome = "purchase_intent", model = "10-fold CV (LM)"),
+  collect_metrics(cv_honesty) |> filter(.metric == "rmse") |>
+    mutate(outcome = "percived_honesty", model = "10-fold CV (LM)"),
+  collect_metrics(cv_auth) |> filter(.metric == "rmse") |>
+    mutate(outcome = "percived_authenticity", model = "10-fold CV (LM)")
+) |> select(outcome, model, rmse = mean)
+
+# Bayesian RMSE — posterior predictive RMSE
+bayes_rmse <- function(fit, outcome_col) {
+  obs  <- fit$data[[outcome_col]]
+  pred <- fitted(fit)[, "Estimate"]
+  sqrt(mean((obs - pred)^2))
+}
+
+rmse_bayes <- tibble(
+  outcome = c("purchase_intent", "percived_honesty", "percived_authenticity"),
+  model   = "Bayesian Hierarchical",
+  rmse    = c(
+    bayes_rmse(bayes_purchase, "purchase_intent"),
+    bayes_rmse(bayes_honesty,  "percived_honesty"),
+    bayes_rmse(bayes_auth,     "percived_authenticity")
+  )
+)
+
+# PLM RMSE
+plm_rmse <- function(mod) sqrt(mean(residuals(mod)^2))
+
+rmse_plm <- tibble(
+  outcome = c("purchase_intent", "percived_honesty", "percived_authenticity"),
+  model   = "PLM Random Effects (base)",
+  rmse    = c(
+    plm_rmse(model_purchase),
+    plm_rmse(model_honesty),
+    plm_rmse(model_auth)
+  )
+)
+
+rmse_plm_int <- tibble(
+  outcome = c("purchase_intent", "percived_honesty", "percived_authenticity"),
+  model   = "PLM Random Effects (interaction)",
+  rmse    = c(
+    plm_rmse(model_purchase_int),
+    plm_rmse(model_honesty_int),
+    plm_rmse(model_auth_int)
+  )
+)
+
+# Combine and display
+rmse_all <- bind_rows(rmse_cv, rmse_bayes, rmse_plm, rmse_plm_int) |>
+  arrange(outcome, rmse)
+
+print(rmse_all, n = Inf)
+```

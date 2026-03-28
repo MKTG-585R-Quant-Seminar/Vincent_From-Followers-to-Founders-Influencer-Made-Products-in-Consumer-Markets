@@ -1,0 +1,247 @@
+---
+title: "Followers to Founders"
+author: "Vincent V. Crowns"
+format: html
+editor: visual
+---
+
+```{r}
+### Setup the data and libraries
+library(plm)
+library(tidyverse)
+library(tidymodels)
+library(car)
+data <- read_csv("FtF_cleaned.csv")
+```
+
+```{r}
+### Clean and dummy-code data
+cleaned_data <- data |>
+
+  # --- Dummy-code platforms ---
+  mutate(
+    plt_instagram = as.integer(str_detect(platforms, "Instagram")),
+    plt_snapchat  = as.integer(str_detect(platforms, "Snapchat")),
+    plt_tiktok    = as.integer(str_detect(platforms, "TikTok")),
+    plt_x         = as.integer(str_detect(platforms, "X \\(Twitter\\)")),
+    plt_youtube   = as.integer(str_detect(platforms, "YouTube")),
+    plt_twitch    = as.integer(str_detect(platforms, "Twitch")),
+    plt_facebook  = as.integer(str_detect(platforms, "FaceBook"))
+  ) |>
+
+  # --- Dummy-code influencers_known ---
+  mutate(
+    inf_shaq     = as.integer(str_detect(influencers_known, "Shaquille O'Neal")),
+    inf_kylie    = as.integer(str_detect(influencers_known, "Kylie Jenner")),
+    inf_mrbeast  = as.integer(str_detect(influencers_known, "MrBeast")),
+    inf_logan    = as.integer(str_detect(influencers_known, "Logan Paul")),
+    inf_curry    = as.integer(str_detect(influencers_known, "Stephen Curry")),
+    inf_taylor   = as.integer(str_detect(influencers_known, "Taylor Swift")),
+    inf_ryan     = as.integer(str_detect(influencers_known, "Ryan Reynolds")),
+    inf_ksi      = as.integer(str_detect(influencers_known, "KSI")),
+    inf_charli   = as.integer(str_detect(influencers_known, "Charli D'Amelio"))
+  ) |>
+
+  # --- Drop original multi-value columns ---
+  select(-platforms, -influencers_known) |>
+
+  # --- Scenario ID and cleaning ---
+  group_by(influencer, number_of_comments, number_of_likes, writting_style) |>
+  mutate(scenario = cur_group_id()) |>
+  ungroup() |>
+  drop_na() |>
+  group_by(ResponseId) |>
+  filter(n() > 1) |>
+  ungroup()
+
+colSums(is.na(cleaned_data))
+glimpse(cleaned_data)
+```
+
+```{r}
+### Build panel data frame
+cleaned_data$task <- ave(cleaned_data$scenario, cleaned_data$ResponseId, FUN = seq_along)
+pdata <- pdata.frame(cleaned_data, index = c("ResponseId", "task"))
+```
+
+------------------------------------------------------------------------
+
+## Purchase Intent Models
+
+*"I would consider purchasing this product."*
+
+```{r}
+# Base model
+model_purchase <- plm(
+  purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase)
+```
+
+```{r}
+# Interaction model
+model_purchase_int <- plm(
+  purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer,
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase_int)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Perceived Honesty Models
+
+*"This influencer seems honest."*
+
+```{r}
+# Base model
+model_honesty <- plm(
+  percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty)
+```
+
+```{r}
+# Interaction model
+model_honesty_int <- plm(
+  percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+    number_of_comments:plt_instagram + number_of_comments:plt_tiktok +
+    number_of_comments:plt_youtube + number_of_comments:plt_x +
+    number_of_likes:plt_instagram + number_of_likes:plt_tiktok +
+    number_of_likes:plt_youtube + number_of_likes:plt_x +
+    writting_style:plt_instagram + writting_style:plt_tiktok +
+    writting_style:plt_youtube + writting_style:plt_x +
+    influencer:plt_instagram + influencer:plt_tiktok +
+    influencer:plt_youtube + influencer:plt_x +
+    number_of_comments:inf_kylie + number_of_comments:inf_mrbeast +
+    number_of_comments:inf_logan + number_of_comments:inf_taylor +
+    number_of_likes:inf_kylie + number_of_likes:inf_mrbeast +
+    number_of_likes:inf_logan + number_of_likes:inf_taylor +
+    writting_style:inf_kylie + writting_style:inf_mrbeast +
+    writting_style:inf_logan + writting_style:inf_taylor +
+    influencer:inf_kylie + influencer:inf_mrbeast +
+    influencer:inf_logan + influencer:inf_taylor,
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty_int)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Perceived Authenticity Models
+
+*"This influencer seems authentic."*
+
+```{r}
+# Base model
+model_auth <- plm(
+  percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth)
+```
+
+```{r}
+# Interaction model
+model_auth_int <- plm(
+  percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    age_range + gender + income_level + education + race +
+    employment_status + marritial_status +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli +
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+    number_of_comments:plt_instagram + number_of_comments:plt_tiktok +
+    number_of_comments:plt_youtube + number_of_comments:plt_x +
+    number_of_likes:plt_instagram + number_of_likes:plt_tiktok +
+    number_of_likes:plt_youtube + number_of_likes:plt_x +
+    writting_style:plt_instagram + writting_style:plt_tiktok +
+    writting_style:plt_youtube + writting_style:plt_x +
+    influencer:plt_instagram + influencer:plt_tiktok +
+    influencer:plt_youtube + influencer:plt_x +
+    number_of_comments:inf_kylie + number_of_comments:inf_mrbeast +
+    number_of_comments:inf_logan + number_of_comments:inf_taylor +
+    number_of_likes:inf_kylie + number_of_likes:inf_mrbeast +
+    number_of_likes:inf_logan + number_of_likes:inf_taylor +
+    writting_style:inf_kylie + writting_style:inf_mrbeast +
+    writting_style:inf_logan + writting_style:inf_taylor +
+    influencer:inf_kylie + influencer:inf_mrbeast +
+    influencer:inf_logan + influencer:inf_taylor,
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth_int)
+
+## Report Findings Here:
+##
+##
+```

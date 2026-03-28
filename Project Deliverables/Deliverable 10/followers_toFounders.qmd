@@ -1,0 +1,40 @@
+---
+title: "Followers to Founders"
+author: "Vincent V. Crowns"
+format: html
+editor: visual
+---
+
+## From Followers to Founders
+
+```{r}
+library(plm)
+library(tidyverse)
+library(tidymodels)
+```
+
+### Import Data
+
+```{r}
+data <- read_csv("FtF_cleaned.csv")
+```
+
+### Cleaning Data
+
+```{r}
+cleaned_data <- data |>
+  separate_rows(platforms, sep = ",") |> 
+  separate_rows(influencers, sep = ",") |> 
+  drop_na()
+
+colSums(is.na(cleaned_data))
+```
+
+### Preprocessing
+
+```{r}
+split_data <- initial_split(cleaned_data, prop = 0.8)
+
+train <- training(split)
+test  <- testing(split)
+```

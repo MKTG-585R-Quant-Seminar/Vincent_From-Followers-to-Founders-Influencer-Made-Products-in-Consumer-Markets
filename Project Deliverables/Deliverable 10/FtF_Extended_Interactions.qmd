@@ -1,0 +1,686 @@
+---
+title: "Followers to Founders — Extended Demographic Interaction Models"
+author: "Vincent V. Crowns"
+format: html
+editor: visual
+---
+
+# Overview
+
+This file contains **9 exploratory PLM random effects models** — 3 per outcome, each testing a different moderator set against the conjoint attributes.
+
+-   **Model A** — Conjoint × Demographics (age_range, gender, income_level)
+-   **Model B** — Conjoint × Social Media Platforms
+-   **Model C** — Conjoint × Known Influencers
+
+All models include conjoint × conjoint interactions from the main analysis file as a baseline. Estimated coefficient counts are all well under the n = 208 respondent ceiling. Compare RMSE across models to determine which moderator set explains the most variance per outcome.
+
+------------------------------------------------------------------------
+
+```{r}
+### Setup
+library(plm)
+library(tidyverse)
+library(car)
+data <- read_csv("FtF_cleaned.csv")
+```
+
+------------------------------------------------------------------------
+
+## Straightlining Check
+
+```{r}
+straightliners <- data |>
+  group_by(ResponseId) |>
+  summarise(
+    sd_purchase = sd(purchase_intent,       na.rm = TRUE),
+    sd_honesty  = sd(percived_honesty,      na.rm = TRUE),
+    sd_auth     = sd(percived_authenticity, na.rm = TRUE)
+  ) |>
+  filter(sd_purchase == 0 | sd_honesty == 0 | sd_auth == 0) |>
+  pull(ResponseId)
+
+cat("Straightliners removed:", length(straightliners), "\n")
+cat("Respondents remaining:", n_distinct(data$ResponseId) - length(straightliners), "\n")
+
+data <- data |> filter(!ResponseId %in% straightliners)
+```
+
+------------------------------------------------------------------------
+
+## Cleaning & Dummy-Coding
+
+```{r}
+cleaned_data <- data |>
+
+  mutate(
+    plt_instagram = as.integer(str_detect(platforms, "Instagram")),
+    plt_snapchat  = as.integer(str_detect(platforms, "Snapchat")),
+    plt_tiktok    = as.integer(str_detect(platforms, "TikTok")),
+    plt_x         = as.integer(str_detect(platforms, "X \\(Twitter\\)")),
+    plt_youtube   = as.integer(str_detect(platforms, "YouTube")),
+    plt_twitch    = as.integer(str_detect(platforms, "Twitch")),
+    plt_facebook  = as.integer(str_detect(platforms, "FaceBook"))
+  ) |>
+
+  mutate(
+    inf_shaq    = as.integer(str_detect(influencers_known, "Shaquille O'Neal")),
+    inf_kylie   = as.integer(str_detect(influencers_known, "Kylie Jenner")),
+    inf_mrbeast = as.integer(str_detect(influencers_known, "MrBeast")),
+    inf_logan   = as.integer(str_detect(influencers_known, "Logan Paul")),
+    inf_curry   = as.integer(str_detect(influencers_known, "Stephen Curry")),
+    inf_taylor  = as.integer(str_detect(influencers_known, "Taylor Swift")),
+    inf_ryan    = as.integer(str_detect(influencers_known, "Ryan Reynolds")),
+    inf_ksi     = as.integer(str_detect(influencers_known, "KSI")),
+    inf_charli  = as.integer(str_detect(influencers_known, "Charli D'Amelio"))
+  ) |>
+
+  dplyr::select(-platforms, -influencers_known) |>
+
+  group_by(influencer, number_of_comments, number_of_likes, writting_style) |>
+  mutate(scenario = cur_group_id()) |>
+  ungroup() |>
+  drop_na() |>
+  group_by(ResponseId) |>
+  filter(n() > 1) |>
+  ungroup()
+
+colSums(is.na(cleaned_data))
+glimpse(cleaned_data)
+```
+
+```{r}
+### Convert conjoint attributes to factors
+cleaned_data <- cleaned_data |>
+  mutate(
+    number_of_comments = as.factor(number_of_comments),
+    number_of_likes    = as.factor(number_of_likes),
+    writting_style     = as.factor(writting_style),
+    influencer         = as.factor(influencer)
+  )
+
+cleaned_data$influencer <- relevel(cleaned_data$influencer, ref = "0")
+```
+
+```{r}
+### Build panel data frame
+cleaned_data$task <- ave(cleaned_data$scenario, cleaned_data$ResponseId, FUN = seq_along)
+pdata <- pdata.frame(cleaned_data, index = c("ResponseId", "task"))
+```
+
+## PLM Random Effects Models
+
+### Purchase Intent
+
+*"I would consider purchasing this product."*
+
+```{r}
+# Base model
+model_purchase <- plm(
+  purchase_intent ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase)
+```
+
+### Perceived Honesty
+
+*"This influencer seems honest."*
+
+```{r}
+# Base model
+model_honesty <- plm(
+  percived_honesty ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty)
+```
+
+## Perceived Authenticity
+
+*"This influencer seems authentic."*
+
+```{r}
+# Base model
+model_auth <- plm(
+  percived_authenticity ~
+    number_of_comments + number_of_likes + writting_style + influencer +
+    influencer_interaction + social_media_use + product_purchase +
+    plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook +
+    inf_shaq + inf_kylie + inf_mrbeast + inf_logan + inf_curry +
+    inf_taylor + inf_ryan + inf_ksi + inf_charli,
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth)
+```
+
+------------------------------------------------------------------------
+
+# Purchase Intent Models
+
+*"I would consider purchasing this product."*
+
+------------------------------------------------------------------------
+
+## Model A — Conjoint × Demographics
+
+*Moderators: age_range, gender, income_level (\~148 coefficients)*
+
+```{r}
+model_purchase_A <- plm(
+  purchase_intent ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:age_range +
+    number_of_likes:age_range +
+    writting_style:age_range +
+    influencer:age_range +
+
+    number_of_comments:gender +
+    number_of_likes:gender +
+    writting_style:gender +
+    influencer:gender +
+
+    number_of_comments:income_level +
+    number_of_likes:income_level +
+    writting_style:income_level +
+    influencer:income_level,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase_A)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model B — Conjoint × Platforms
+
+*Moderators: all 7 platform dummies (\~113 coefficients)*
+
+```{r}
+model_purchase_B <- plm(
+  purchase_intent ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:plt_instagram + number_of_comments:plt_snapchat +
+    number_of_comments:plt_tiktok + number_of_comments:plt_x +
+    number_of_comments:plt_youtube + number_of_comments:plt_twitch +
+    number_of_comments:plt_facebook +
+    number_of_likes:plt_instagram + number_of_likes:plt_snapchat +
+    number_of_likes:plt_tiktok + number_of_likes:plt_x +
+    number_of_likes:plt_youtube + number_of_likes:plt_twitch +
+    number_of_likes:plt_facebook +
+    writting_style:plt_instagram + writting_style:plt_snapchat +
+    writting_style:plt_tiktok + writting_style:plt_x +
+    writting_style:plt_youtube + writting_style:plt_twitch +
+    writting_style:plt_facebook +
+    influencer:plt_instagram + influencer:plt_snapchat +
+    influencer:plt_tiktok + influencer:plt_x +
+    influencer:plt_youtube + influencer:plt_twitch +
+    influencer:plt_facebook,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase_B)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model C — Conjoint × Known Influencers
+
+*Moderators: all 9 known influencer dummies (\~123 coefficients)*
+
+```{r}
+model_purchase_C <- plm(
+  purchase_intent ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:inf_shaq + number_of_comments:inf_kylie +
+    number_of_comments:inf_mrbeast + number_of_comments:inf_logan +
+    number_of_comments:inf_curry + number_of_comments:inf_taylor +
+    number_of_comments:inf_ryan + number_of_comments:inf_ksi +
+    number_of_comments:inf_charli +
+    number_of_likes:inf_shaq + number_of_likes:inf_kylie +
+    number_of_likes:inf_mrbeast + number_of_likes:inf_logan +
+    number_of_likes:inf_curry + number_of_likes:inf_taylor +
+    number_of_likes:inf_ryan + number_of_likes:inf_ksi +
+    number_of_likes:inf_charli +
+    writting_style:inf_shaq + writting_style:inf_kylie +
+    writting_style:inf_mrbeast + writting_style:inf_logan +
+    writting_style:inf_curry + writting_style:inf_taylor +
+    writting_style:inf_ryan + writting_style:inf_ksi +
+    writting_style:inf_charli +
+    influencer:inf_shaq + influencer:inf_kylie +
+    influencer:inf_mrbeast + influencer:inf_logan +
+    influencer:inf_curry + influencer:inf_taylor +
+    influencer:inf_ryan + influencer:inf_ksi +
+    influencer:inf_charli,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_purchase_C)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+# Perceived Honesty Models
+
+*"This influencer seems honest."*
+
+------------------------------------------------------------------------
+
+## Model A — Conjoint × Demographics
+
+```{r}
+model_honesty_A <- plm(
+  percived_honesty ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:age_range +
+    number_of_likes:age_range +
+    writting_style:age_range +
+    influencer:age_range +
+
+    number_of_comments:gender +
+    number_of_likes:gender +
+    writting_style:gender +
+    influencer:gender +
+
+    number_of_comments:income_level +
+    number_of_likes:income_level +
+    writting_style:income_level +
+    influencer:income_level,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty_A)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model B — Conjoint × Platforms
+
+```{r}
+model_honesty_B <- plm(
+  percived_honesty ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:plt_instagram + number_of_comments:plt_snapchat +
+    number_of_comments:plt_tiktok + number_of_comments:plt_x +
+    number_of_comments:plt_youtube + number_of_comments:plt_twitch +
+    number_of_comments:plt_facebook +
+    number_of_likes:plt_instagram + number_of_likes:plt_snapchat +
+    number_of_likes:plt_tiktok + number_of_likes:plt_x +
+    number_of_likes:plt_youtube + number_of_likes:plt_twitch +
+    number_of_likes:plt_facebook +
+    writting_style:plt_instagram + writting_style:plt_snapchat +
+    writting_style:plt_tiktok + writting_style:plt_x +
+    writting_style:plt_youtube + writting_style:plt_twitch +
+    writting_style:plt_facebook +
+    influencer:plt_instagram + influencer:plt_snapchat +
+    influencer:plt_tiktok + influencer:plt_x +
+    influencer:plt_youtube + influencer:plt_twitch +
+    influencer:plt_facebook,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty_B)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model C — Conjoint × Known Influencers
+
+```{r}
+model_honesty_C <- plm(
+  percived_honesty ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:inf_shaq + number_of_comments:inf_kylie +
+    number_of_comments:inf_mrbeast + number_of_comments:inf_logan +
+    number_of_comments:inf_curry + number_of_comments:inf_taylor +
+    number_of_comments:inf_ryan + number_of_comments:inf_ksi +
+    number_of_comments:inf_charli +
+    number_of_likes:inf_shaq + number_of_likes:inf_kylie +
+    number_of_likes:inf_mrbeast + number_of_likes:inf_logan +
+    number_of_likes:inf_curry + number_of_likes:inf_taylor +
+    number_of_likes:inf_ryan + number_of_likes:inf_ksi +
+    number_of_likes:inf_charli +
+    writting_style:inf_shaq + writting_style:inf_kylie +
+    writting_style:inf_mrbeast + writting_style:inf_logan +
+    writting_style:inf_curry + writting_style:inf_taylor +
+    writting_style:inf_ryan + writting_style:inf_ksi +
+    writting_style:inf_charli +
+    influencer:inf_shaq + influencer:inf_kylie +
+    influencer:inf_mrbeast + influencer:inf_logan +
+    influencer:inf_curry + influencer:inf_taylor +
+    influencer:inf_ryan + influencer:inf_ksi +
+    influencer:inf_charli,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_honesty_C)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+# Perceived Authenticity Models
+
+*"This influencer seems authentic."*
+
+------------------------------------------------------------------------
+
+## Model A — Conjoint × Demographics
+
+```{r}
+model_auth_A <- plm(
+  percived_authenticity ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:age_range +
+    number_of_likes:age_range +
+    writting_style:age_range +
+    influencer:age_range +
+
+    number_of_comments:gender +
+    number_of_likes:gender +
+    writting_style:gender +
+    influencer:gender +
+
+    number_of_comments:income_level +
+    number_of_likes:income_level +
+    writting_style:income_level +
+    influencer:income_level,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth_A)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model B — Conjoint × Platforms
+
+```{r}
+model_auth_B <- plm(
+  percived_authenticity ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:plt_instagram + number_of_comments:plt_snapchat +
+    number_of_comments:plt_tiktok + number_of_comments:plt_x +
+    number_of_comments:plt_youtube + number_of_comments:plt_twitch +
+    number_of_comments:plt_facebook +
+    number_of_likes:plt_instagram + number_of_likes:plt_snapchat +
+    number_of_likes:plt_tiktok + number_of_likes:plt_x +
+    number_of_likes:plt_youtube + number_of_likes:plt_twitch +
+    number_of_likes:plt_facebook +
+    writting_style:plt_instagram + writting_style:plt_snapchat +
+    writting_style:plt_tiktok + writting_style:plt_x +
+    writting_style:plt_youtube + writting_style:plt_twitch +
+    writting_style:plt_facebook +
+    influencer:plt_instagram + influencer:plt_snapchat +
+    influencer:plt_tiktok + influencer:plt_x +
+    influencer:plt_youtube + influencer:plt_twitch +
+    influencer:plt_facebook,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth_B)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+## Model C — Conjoint × Known Influencers
+
+```{r}
+model_auth_C <- plm(
+  percived_authenticity ~
+
+    number_of_comments + number_of_likes + writting_style + influencer +
+
+    age_range + gender + income_level + education + employment_status +
+    marritial_status + race + influencer_interaction + social_media_use +
+    product_purchase + plt_instagram + plt_snapchat + plt_tiktok + plt_x +
+    plt_youtube + plt_twitch + plt_facebook + inf_shaq + inf_kylie +
+    inf_mrbeast + inf_logan + inf_curry + inf_taylor + inf_ryan +
+    inf_ksi + inf_charli +
+
+    number_of_comments:number_of_likes +
+    number_of_comments:writting_style +
+    number_of_comments:influencer +
+    number_of_likes:writting_style +
+    number_of_likes:influencer +
+    writting_style:influencer +
+
+    number_of_comments:inf_shaq + number_of_comments:inf_kylie +
+    number_of_comments:inf_mrbeast + number_of_comments:inf_logan +
+    number_of_comments:inf_curry + number_of_comments:inf_taylor +
+    number_of_comments:inf_ryan + number_of_comments:inf_ksi +
+    number_of_comments:inf_charli +
+    number_of_likes:inf_shaq + number_of_likes:inf_kylie +
+    number_of_likes:inf_mrbeast + number_of_likes:inf_logan +
+    number_of_likes:inf_curry + number_of_likes:inf_taylor +
+    number_of_likes:inf_ryan + number_of_likes:inf_ksi +
+    number_of_likes:inf_charli +
+    writting_style:inf_shaq + writting_style:inf_kylie +
+    writting_style:inf_mrbeast + writting_style:inf_logan +
+    writting_style:inf_curry + writting_style:inf_taylor +
+    writting_style:inf_ryan + writting_style:inf_ksi +
+    writting_style:inf_charli +
+    influencer:inf_shaq + influencer:inf_kylie +
+    influencer:inf_mrbeast + influencer:inf_logan +
+    influencer:inf_curry + influencer:inf_taylor +
+    influencer:inf_ryan + influencer:inf_ksi +
+    influencer:inf_charli,
+
+  data  = pdata,
+  model = "random"
+)
+summary(model_auth_C)
+
+## Report Findings Here:
+##
+##
+```
+
+------------------------------------------------------------------------
+
+# RMSE Comparison
+
+Run after both this file and FtF_Analysis_bay.qmd have been executed in the same R session.
+
+```{r}
+plm_rmse <- function(mod) sqrt(mean(residuals(mod)^2))
+
+rmse_all <- tibble(
+  outcome = rep(c("purchase_intent", "percived_honesty", "percived_authenticity"), each = 4),
+  model   = rep(c("Original Interaction", "Model A: Demographics",
+                  "Model B: Platforms",   "Model C: Known Influencers"), times = 3),
+  rmse    = c(
+    plm_rmse(model_purchase), plm_rmse(model_purchase_A),
+    plm_rmse(model_purchase_B),   plm_rmse(model_purchase_C),
+    plm_rmse(model_honesty),  plm_rmse(model_honesty_A),
+    plm_rmse(model_honesty_B),    plm_rmse(model_honesty_C),
+    plm_rmse(model_auth),     plm_rmse(model_auth_A),
+    plm_rmse(model_auth_B),       plm_rmse(model_auth_C)
+  )
+) |> arrange(outcome, rmse)
+
+print(rmse_all, n = Inf)
+```
